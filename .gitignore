@@ -1,0 +1,13 @@
+# ---> Python
+__pycache__/
+*.py[cod]
+.venv/
+out/
+*.db
+*.csv
+*.json
+
+# Mail data: never publish
+inputs/
+*.pst
+*.ost
