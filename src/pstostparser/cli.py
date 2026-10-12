@@ -12,7 +12,8 @@ from .backends import BACKEND_CHOICES, detect_backends, guess_format, resolve_ba
 from .boilerplate import load_custom_patterns, strip_boilerplate
 from .exporter import (load_manifest, manifest_keys, matches_filters,
                    max_stem_index, message_key, write_csv, write_json,
-                   write_sqlite)
+                   write_sqlite,
+                   is_already_exported, manifest_message_ids)
 from .markdown import effective_body_text, mail_stem, write_markdown
 
 
@@ -39,9 +40,10 @@ def live_arg_error(args) -> str | None:
     live = getattr(args, "live", False)
     date = getattr(args, "date", "")
     folder = getattr(args, "folder", None)
+    name = getattr(args, "name", "")
     if not live:
-        if date or folder:
-            return "--date and --folder only apply with --live"
+        if date or folder or name:
+            return "--date, --folder and --name only apply with --live"
         if not args.input:
             return "give a .pst/.ost path, or use --live --date YYYY-MM-DD"
         return None
@@ -49,6 +51,8 @@ def live_arg_error(args) -> str | None:
         return "--live reads the running Outlook; leave out the .pst/.ost path"
     if args.backend not in ("auto", "outlook"):
         return "--live always uses the outlook backend; drop --backend"
+    if name and any(c in name for c in '\\/:*?"<>|'):
+        return '--name must be a plain file name, without folders or any of \\ / : * ? " < > |'
     if not date:
         return "--live needs --date YYYY-MM-DD"
     try:
@@ -60,9 +64,9 @@ def live_arg_error(args) -> str | None:
     return None
 
 
-def live_base_name(day: str) -> str:
-    """File stem for a live export, e.g. outlook-live_2026-10-12.json."""
-    return f"outlook-live_{day}"
+def live_base_name(day: str, name: str = "") -> str:
+    """File stem for a live export: --name when given, else e.g. outlook-live_2026-10-12."""
+    return name or f"outlook-live_{day}"
 
 
 def _messages(backend_mod, live: bool, args, store, skip_ids, stats):
@@ -161,12 +165,13 @@ def cmd_export(args, list_only: bool = False) -> int:
         print(f"File not found: {args.input}", file=sys.stderr)
         return 2
     backend = "outlook" if live else resolve_backend(args.backend)
-    base = live_base_name(args.date) if live else os.path.splitext(os.path.basename(args.input))[0]
+    base = live_base_name(args.date, getattr(args, "name", "")) if live else os.path.splitext(os.path.basename(args.input))[0]
     rows: list[dict] = []
     extra_boiler: list = []
     # ── incremental: skip ids already in the output manifest ──
     existing_rows: list[dict] = []
     skip_ids: set[str] = set()
+    skip_message_ids: set[tuple[str, str]] = set()
     next_idx = 0
     n_skipped_post = 0
     stats: dict = {}
@@ -174,6 +179,7 @@ def cmd_export(args, list_only: bool = False) -> int:
         existing_rows = load_manifest(args.out, base)
         if existing_rows:
             skip_ids = manifest_keys(existing_rows)
+            skip_message_ids = manifest_message_ids(existing_rows)
             next_idx = max_stem_index(existing_rows) + 1
             print(f"Incremental: {len(existing_rows)} message(s) already in {args.out}, "
                   f"skipping {len(skip_ids)} known id(s); new stems from {next_idx:06d}")
@@ -217,12 +223,9 @@ def cmd_export(args, list_only: bool = False) -> int:
             n = 0
 
             def _already_exported(m) -> bool:
-                # Safety net for ids the backend fast path can't see
-                # (internet_message_id-only keys, soft-deleted items, pypff).
-                if not skip_ids:
-                    return False
-                k = message_key(m)
-                return bool(k) and k in skip_ids
+                # Safety net for ids the backend fast path can't see: the same mail from
+                # another backend (internet_message_id) and soft-deleted items.
+                return is_already_exported(m, skip_ids, skip_message_ids)
 
             def _handle(raw, m) -> None:
                 nonlocal n, next_idx
@@ -400,6 +403,9 @@ def build_parser() -> argparse.ArgumentParser:
     pe.add_argument("--folder", action="append", metavar="NAME",
                     help="With --live: only this folder (a name, or a path under the store such as "
                          "Inbox/Clients); repeat for more")
+    pe.add_argument("--name", default="", metavar="STEM",
+                    help="With --live: output file stem. Give the existing manifest's name (for example the "
+                         "OST file's) with --incremental to continue that export")
     pe.add_argument("--quiet", action="store_true")
     pe.set_defaults(func=cmd_export)
     return p

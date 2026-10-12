@@ -97,8 +97,20 @@ uv run pstostparser export --live --date 2026-10-12 -o ./out --folder Inbox --fo
 - The day is the local calendar day the mail arrived on. `received_date` holds that local time with no zone suffix. `date` is unchanged: SentOn first, as in the other Outlook exports.
 - `received_date` is filled for Outlook exports, file or live. Aspose and pypff rows leave it blank.
 - `--after`/`--before` do not apply with `--live`; use `--date`.
-- Output files are named `outlook-live_<date>.*`. The export never quits Outlook.
+- Output files are named `outlook-live_<date>.*`, or the name given with `--name`. The export never quits Outlook.
 - Older dates take longer, because each folder is read from its newest item back to that day: about 40 seconds for a day three months back on this mailbox, a few seconds for recent days.
+
+### Continue an existing export
+
+`--name` sets the output name, and `--incremental` continues an existing export. Give the base name of that export's `.json`, `.csv` and `.db` files. For an export made from `mailbox.ost`, that is `mailbox`. Numbering picks up after the highest existing stem, and mail the export already holds is skipped. Run this from the project folder, replacing the placeholders:
+
+```powershell
+uv run pstostparser export --live --date 2026-10-12 -o "D:\path\to\export-folder" --name "mailbox" --incremental --format all --save-md --attachments --strip-boilerplate
+```
+
+- Use the same options as the original export. `--strip-boilerplate` matches exports made with it.
+- The `.json`, `.csv` and `.db` files are rewritten with the old and new rows, so keep a copy first.
+- For another day, change `--date`. Running the command again adds only mail that isn't in the export yet.
 
 ## Boilerplate stripping
 

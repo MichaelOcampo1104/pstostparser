@@ -311,7 +311,7 @@ class ExporterReceivedDateTests(unittest.TestCase):
 
 
 def _args(**overrides):
-    base = dict(input="", backend="auto", live=False, date="", folder=None, after="", before="")
+    base = dict(input="", backend="auto", live=False, date="", folder=None, after="", before="", name="")
     base.update(overrides)
     return argparse.Namespace(**base)
 
@@ -363,6 +363,69 @@ class LiveParserTests(unittest.TestCase):
 
     def test_live_output_base_name_is_dated(self):
         self.assertEqual(cli.live_base_name("2026-10-12"), "outlook-live_2026-10-12")
+
+
+class ExistingExportTests(unittest.TestCase):
+    """Continuing an export: a message is skipped when the manifest already holds it. Matching is by
+    entry_id, or by internet_message_id together with the received time (one id can be shared by many mails)."""
+
+    def test_entry_id_match_is_skipped(self):
+        self.assertTrue(exporter.is_already_exported({"entry_id": "A"}, {"A"}, set()))
+
+    def test_same_message_from_another_backend_is_skipped(self):
+        # an Aspose row has its own entry_id; the live copy has another, but the same
+        # internet_message_id and the same received time to the second
+        live = {"entry_id": "OUTLOOK-HEX", "internet_message_id": "<m1@example.com>",
+                "received_date": "2026-10-12T10:36:47.578000"}
+        manifest = [{"entry_id": "ASPOSE-ID", "internet_message_id": "<m1@example.com>",
+                     "date": "2026-10-12T10:36:47+08:00"}]
+        self.assertTrue(exporter.is_already_exported(live, {"ASPOSE-ID"}, exporter.manifest_message_ids(manifest)))
+
+    def test_a_shared_id_with_another_time_is_a_new_message(self):
+        # one Message-ID can belong to many automated mails; the received time tells them apart
+        live = {"entry_id": "NEW", "internet_message_id": "<digest@example.com>",
+                "received_date": "2026-10-12T13:34:52.452000"}
+        manifest = [{"entry_id": "OLD", "internet_message_id": "<digest@example.com>",
+                     "date": "2026-07-02T09:53:30+08:00"}]
+        self.assertFalse(exporter.is_already_exported(live, {"OLD"}, exporter.manifest_message_ids(manifest)))
+
+    def test_an_empty_internet_message_id_never_matches(self):
+        live = {"entry_id": "NEW", "internet_message_id": "", "received_date": "2026-10-12T10:00:00"}
+        manifest = [{"internet_message_id": "", "date": "2026-10-12T10:00:00+08:00"}]
+        self.assertFalse(exporter.is_already_exported(live, set(), exporter.manifest_message_ids(manifest)))
+
+    def test_nothing_known_means_nothing_is_skipped(self):
+        mail = {"entry_id": "A", "internet_message_id": "<a@example.com>", "received_date": "2026-10-12T10:00:00"}
+        self.assertFalse(exporter.is_already_exported(mail, set(), set()))
+
+    def test_manifest_keys_use_the_received_time_when_the_row_has_one(self):
+        rows = [{"internet_message_id": "<a@example.com>", "received_date": "2026-10-12T10:00:00.5",
+                 "date": "2026-10-11T23:50:00+00:00"},
+                {"internet_message_id": "<b@example.com>", "date": "2026-10-12T09:00:00+08:00"},
+                {"internet_message_id": "", "date": "2026-10-12T09:00:00+08:00"},
+                {}]
+        self.assertEqual(exporter.manifest_message_ids(rows),
+                         {("<a@example.com>", "2026-10-12T10:00:00"), ("<b@example.com>", "2026-10-12T09:00:00")})
+
+
+class LiveNameTests(unittest.TestCase):
+    def test_name_replaces_the_default_output_stem(self):
+        self.assertEqual(cli.live_base_name("2026-10-12", "mailbox-export"),
+                         "mailbox-export")
+
+    def test_name_is_accepted_with_live(self):
+        self.assertIsNone(cli.live_arg_error(_args(live=True, date="2026-10-12", name="mailbox-export")))
+
+    def test_name_must_be_a_plain_file_name(self):
+        self.assertIn("plain file name",
+                      cli.live_arg_error(_args(live=True, date="2026-10-12", name="D:\\mailbox-export")))
+
+    def test_name_only_applies_with_live(self):
+        self.assertIn("--live", cli.live_arg_error(_args(input="x.pst", name="mailbox-export")))
+
+    def test_parser_reads_name(self):
+        a = cli.build_parser().parse_args(["export", "--live", "--date", "2026-10-12", "--name", "mailbox-export"])
+        self.assertEqual(a.name, "mailbox-export")
 
 
 if __name__ == "__main__":

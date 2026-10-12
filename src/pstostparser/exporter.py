@@ -114,6 +114,27 @@ def manifest_keys(rows: list[dict]) -> set[str]:
     return {k for k in (message_key(r) for r in rows) if k}
 
 
+def _message_identity(m: dict) -> tuple[str, str] | None:
+    """(internet_message_id, received time to the second). One id can be shared by many mails (a recurring
+    digest), and the same mail has a different entry_id in each backend, so both parts are needed."""
+    imid = str(m.get("internet_message_id") or "")
+    when = str(m.get("received_date") or m.get("date") or "")[:19]
+    return (imid, when) if imid and when else None
+
+
+def manifest_message_ids(rows: list[dict]) -> set[tuple[str, str]]:
+    return {k for k in (_message_identity(r) for r in rows) if k}
+
+
+def is_already_exported(m: dict, skip_ids: set[str], skip_message_ids: set[tuple[str, str]]) -> bool:
+    """True when the manifest already holds this message, by entry_id (or key) or by identity."""
+    k = message_key(m)
+    if k and k in skip_ids:
+        return True
+    identity = _message_identity(m)
+    return identity is not None and identity in skip_message_ids
+
+
 def max_stem_index(rows: list[dict]) -> int:
     """Highest numeric prefix in existing stems (-1 when none parse)."""
     best = -1
